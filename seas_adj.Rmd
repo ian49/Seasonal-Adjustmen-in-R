@@ -25,6 +25,7 @@ tax_data <- read_csv('rev_exp.csv',col_names = F,skip = 8,
 #install.packages('seasonal')
 library(seasonal)
 
+#convert data to time series format
 tax_ts <- ts(tax_data$tax_revenue,start = c(2013,1),frequency = 12)
 
 tax_series <- seas(tax_ts,regression.aictest = NULL,#seats=NULL,
