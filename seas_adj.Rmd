@@ -1,0 +1,149 @@
+---
+title: "Seasonal Adjustment in R"
+author: "Ian Mutwiri"
+date: "5/5/2022"
+output: github_document
+---
+
+An example of doing seasonal adjustment in R
+```{r}
+library(tidyverse)
+library(lubridate)
+
+#you can get the data at #https://www.centralbank.go.ke/statistics/government-finance-statistics/
+tax_data <- read_csv('rev_exp.csv',col_names = F,skip = 8,
+                     col_select = c(1,2,8,10)) %>% 
+  rename('Year'=X1,'Month'=X2,'Tax Revenue'=X8,'Total Revenue'=X10) %>% 
+  janitor::clean_names() %>% 
+  unite(date,year:month,sep = '-') %>% 
+  mutate(date=as_date(paste(date,'-','01'))) %>% 
+  filter(date>='2013-01-01')
+```
+
+```{r}
+#Seasonal adjustment
+#install.packages('seasonal')
+library(seasonal)
+
+tax_ts <- ts(tax_data$tax_revenue,start = c(2013,1),frequency = 12)
+
+tax_series <- seas(tax_ts,regression.aictest = NULL,#seats=NULL,
+                   forecast.save='forecasts')
+summary(tax_series)
+```
+
+
+```{r}
+#compute and extract forecasts
+preds<- series(tax_series,'forecast.forecasts')
+preds <- preds %>% 
+  ggts::as_ts_df(date_col = T) %>% 
+  filter(time<'2022-09-01') %>% 
+  as_tibble() %>% 
+  mutate(across(where(is.numeric),~.*.001))
+
+
+```
+
+
+```{r}
+seas_tax_rev_x13 <- tibble(
+  time=tax_data$date,
+  tax_rev=tax_ts,#original
+  tax_seas_x13=final(tax_series),#seasonally adjusted
+  tax_trend_x13=trend(tax_series)) %>% #trend series
+  pivot_longer(cols = 2:4,names_to = 'component',values_to = 'value') %>% 
+  mutate(value=value*.001,
+         component=as_factor(component))
+```
+
+
+```{r}
+#for extrapolation
+seas_tax_rev_x13_pre <-  seas_tax_rev_x13 %>% 
+  filter(time>='2013-01-01',time<='2020-02-29') %>% 
+  pivot_wider(id_cols = 1,names_from = component,values_from = value)
+
+seas_tax_rev_x13_post <- seas_tax_rev_x13 %>% 
+  filter(time>'2020-02-29') %>% 
+  pivot_wider(id_cols = 1,names_from = component,values_from = value)
+```
+
+
+```{r}
+#also use a linear model for trend
+pre_lm<- lm(tax_rev~time,data = seas_tax_rev_x13_pre)
+
+```
+
+
+```{r}
+trend_data <-  seas_tax_rev_x13_pre%>% 
+  mutate(tax_trend_lm=predict(pre_lm)) %>% 
+  bind_rows(
+    seas_tax_rev_x13_post %>% 
+      mutate(tax_trend_lm=predict(pre_lm,newdata = seas_tax_rev_x13_post))
+    ) %>% 
+   pivot_longer(2:5,names_to = 'series',values_to = 'tax') %>% 
+   filter(!series%in%c('tax_trend_x13')) %>% 
+   mutate(series=as_factor(series)) 
+```
+
+
+```{r}
+#choose colors to use 
+colors<- RColorBrewer::brewer.pal(3,'Dark2')
+```
+
+
+```{r}
+#for annotation
+label_data <- tibble(x=ymd(c('2015-08-01','2021-04-01','2020-10-01')),
+                     y=c(1050,700,900),
+                     label=c('Actual','Adjusted','Trend'),
+                     color=colors)
+```
+
+
+```{r}
+tax_chart<- trend_data %>% 
+   ggplot(aes(x=time,y=tax,color=series))+
+   geom_line(aes(lty=series),size=1,show.legend = F)+
+   geom_text(data = label_data,aes(x,y,label=label),color=colors,
+             show.legend = F)+
+   geom_rect(preds,
+             mapping = aes(xmin=ymd('2022-03-01'),ymin=0,
+                           xmax=ymd('2022-08-01'),ymax=2000),
+             inherit.aes = F,fill="#B3CDE3",alpha=.1)+
+   geom_line(data = preds,
+            aes(time,forecast),inherit.aes = F,size=1,color='gray50')+
+   scale_colour_manual(values = colors)+
+   labs(
+     x='',y='',
+     title = 'Tax revenue likely to remain above pre-pandemic trend',
+     subtitle = 'Monthly tax revenue,billion shillings,seasonally adjusted through Feb 2022',
+     caption = 'Source:Central Bank of Kenya,shaded area is forecast. Chart by @mutwiri_ian\nX13-ARIMA-SEATS adjustment'
+   )+
+  theme_minimal()+
+  theme(
+    plot.caption = element_text(hjust = .01,vjust = 5)
+  )
+
+tax_chart
+```
+
+
+```{r}
+ggsave('tax_chart.png',width = 614,height = 387,units = 'px')
+
+```
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
